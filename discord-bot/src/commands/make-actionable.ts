@@ -9,6 +9,7 @@ import { ClaudeAnalyzer } from '../services/claude-analyzer.js';
 import { DigestFormatter } from '../services/digest-formatter.js';
 import { UserStore } from '../database/user-store.js';
 import { UsageStore } from '../database/usage-store.js';
+import { BookmarkStore } from '../database/bookmark-store.js';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -51,22 +52,33 @@ export async function handleMakeActionable(
       ct0: user.ct0,
     });
 
-    // Quick analysis with Groq
-    const analyzer = new ClaudeAnalyzer();
-    const { analyses, inputTokens, outputTokens, totalCost } =
-      await analyzer.analyzeBookmarks([bookmark]);
+    // Check cache first to avoid re-analyzing
+    let analysis = BookmarkStore.getAnalysis(discordUserId, bookmark.id);
 
-    const analysis = analyses[0];
+    if (!analysis) {
+      await interaction.editReply(`⏳ Analyzing bookmark...`);
 
-    // Track cost (persistent)
-    UsageStore.logUsage({
-      userId: discordUserId,
-      model: GROQ_MODEL,
-      inputTokens,
-      outputTokens,
-      costUsd: totalCost,
-      operation: 'make-actionable',
-    });
+      const analyzer = new ClaudeAnalyzer();
+      const { analyses, inputTokens, outputTokens, totalCost } =
+        await analyzer.analyzeBookmarks([bookmark]);
+
+      analysis = analyses[0]!;
+
+      // Save to cache
+      BookmarkStore.saveAnalyses(discordUserId, [analysis]);
+
+      // Log usage
+      UsageStore.logUsage({
+        userId: discordUserId,
+        model: GROQ_MODEL,
+        inputTokens,
+        outputTokens,
+        costUsd: totalCost,
+        operation: 'make-actionable',
+      });
+    } else {
+      console.log(`✅ Cache hit for bookmark ${bookmark.id}`);
+    }
 
     // Build Opus-ready prompt
     const opusPrompt = buildOpusPrompt(bookmark, analysis);

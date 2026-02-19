@@ -9,6 +9,7 @@ import { ClaudeAnalyzer } from '../services/claude-analyzer.js';
 import { DigestFormatter } from '../services/digest-formatter.js';
 import { UserStore } from '../database/user-store.js';
 import { UsageStore } from '../database/usage-store.js';
+import { BookmarkStore } from '../database/bookmark-store.js';
 import { DigestStats } from '../types/digest.js';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
@@ -77,8 +78,33 @@ export async function handleBookmarkDigest(
       }
     });
 
+    // Check for already-analyzed bookmarks (skip re-analysis)
+    const alreadyAnalyzed = BookmarkStore.hasBeenAnalyzed(
+      discordUserId,
+      bookmarks.map((b) => b.id)
+    );
+
+    const newBookmarks = bookmarks.filter((b) => !alreadyAnalyzed.has(b.id));
+    const skippedCount = bookmarks.length - newBookmarks.length;
+
+    if (skippedCount > 0) {
+      console.log(`⏭️ Skipped ${skippedCount} already-analyzed bookmarks`);
+    }
+
+    if (newBookmarks.length === 0) {
+      const embed = DigestFormatter.buildStatusEmbed(
+        `✨ All ${bookmarks.length} bookmarks have already been analyzed!`,
+        false
+      );
+      await interaction.editReply({ content: '', embeds: [embed] });
+      return;
+    }
+
     const { analyses, totalCost, inputTokens, outputTokens } =
-      await analyzer.analyzeBookmarks(bookmarks);
+      await analyzer.analyzeBookmarks(newBookmarks);
+
+    // Save to cache for future dedup + stats
+    BookmarkStore.saveAnalyses(discordUserId, analyses);
 
     // Step 3: Track usage (persistent)
     UsageStore.logUsage({

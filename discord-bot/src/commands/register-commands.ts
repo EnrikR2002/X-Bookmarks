@@ -44,6 +44,47 @@ const commands = [
         .setDescription('Your X ct0 cookie (DevTools → Application → Cookies)')
         .setRequired(true)
     ),
+  new SlashCommandBuilder()
+    .setName('schedule-digest')
+    .setDescription('Enable or disable scheduled weekly/daily digests')
+    .addSubcommand((sub) =>
+      sub
+        .setName('enable')
+        .setDescription('Enable scheduled digests')
+        .addChannelOption((opt) =>
+          opt
+            .setName('channel')
+            .setDescription('Channel to post digests to')
+            .setRequired(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('frequency')
+            .setDescription('How often to send digests')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Daily at 9am UTC', value: 'daily' },
+              { name: 'Weekly on Monday at 9am UTC', value: 'weekly' }
+            )
+        )
+    )
+    .addSubcommand((sub) =>
+      sub.setName('disable').setDescription('Disable scheduled digests')
+    ),
+  new SlashCommandBuilder()
+    .setName('bookmark-stats')
+    .setDescription('View your bookmark statistics and trends')
+    .addStringOption((opt) =>
+      opt
+        .setName('period')
+        .setDescription('Time period to analyze')
+        .setRequired(false)
+        .addChoices(
+          { name: 'This Week', value: 'week' },
+          { name: 'This Month', value: 'month' },
+          { name: 'All Time', value: 'all' }
+        )
+    ),
 ].map((command) => command.toJSON());
 
 async function registerCommands() {

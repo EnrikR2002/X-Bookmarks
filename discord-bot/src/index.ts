@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import { handleBookmarkDigest } from './commands/bookmark-digest.js';
 import { handleMakeActionable } from './commands/make-actionable.js';
 import { handleRegisterAuth } from './commands/register-auth.js';
+import { scheduler } from './services/scheduler.js';
 
 // Load environment variables
 dotenv.config();
@@ -28,6 +29,7 @@ const client = new Client({
 client.once(Events.ClientReady, (c) => {
   console.log(`✅ Bot is ready! Logged in as ${c.user.tag}`);
   console.log(`📊 Serving ${c.guilds.cache.size} guild(s)`);
+  scheduler.start(client);
 });
 
 // Interaction handler (slash commands)
@@ -48,6 +50,18 @@ client.on(Events.InteractionCreate, async (interaction: Interaction) => {
 
       case 'register-auth':
         await handleRegisterAuth(interaction as ChatInputCommandInteraction);
+        break;
+
+      case 'schedule-digest':
+        await import('./commands/schedule-digest.js').then((m) =>
+          m.handleScheduleDigest(interaction as ChatInputCommandInteraction)
+        );
+        break;
+
+      case 'bookmark-stats':
+        await import('./commands/bookmark-stats.js').then((m) =>
+          m.handleBookmarkStats(interaction as ChatInputCommandInteraction)
+        );
         break;
 
       default:
@@ -81,12 +95,14 @@ process.on('unhandledRejection', (error) => {
 
 process.on('SIGINT', () => {
   console.log('\n👋 Shutting down bot...');
+  scheduler.stop();
   client.destroy();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('\n👋 Shutting down bot...');
+  scheduler.stop();
   client.destroy();
   process.exit(0);
 });
