@@ -1,0 +1,37 @@
+{
+  "name": "x-bookmarks-discord-bot",
+  "version": "1.0.0",
+  "description": "Discord bot for analyzing X/Twitter bookmarks with Claude AI",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "register-commands": "tsx src/commands/register-commands.ts"
+  },
+  "keywords": [
+    "discord",
+    "twitter",
+    "bookmarks",
+    "claude",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.4.5",
+    "groq-sdk": "^0.37.0",
+    "node-cron": "^3.0.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/node": "^20.10.6",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

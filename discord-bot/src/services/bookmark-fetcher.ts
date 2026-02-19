@@ -1,0 +1,230 @@
+/**
+ * Bookmark Fetcher Service
+ * Wraps the fetch_bookmarks.sh bash script to fetch X/Twitter bookmarks via bird CLI
+ */
+
+import { spawn } from 'child_process';
+import { BirdBookmark, BirdBookmarkArray } from '../types/bird-cli.js';
+
+export interface FetchBookmarksOptions {
+  count?: number;
+  authToken?: string;
+  ct0?: string;
+  sinceId?: string;
+}
+
+export class BookmarkFetcher {
+  /**
+   * Fetch bookmarks using the bash script wrapper
+   *
+   * @param options Fetch options (count, auth tokens)
+   * @returns Array of bookmarks from Bird CLI
+   */
+  static async fetchBookmarks(
+    options: FetchBookmarksOptions = {}
+  ): Promise<BirdBookmark[]> {
+    const {
+      count = 50,
+      authToken = process.env.AUTH_TOKEN,
+      ct0 = process.env.CT0,
+      sinceId,
+    } = options;
+
+    if (!authToken || !ct0) {
+      throw new Error(
+        'Missing X authentication tokens. Set AUTH_TOKEN and CT0 in .env or provide them explicitly.'
+      );
+    }
+
+    const birdArgs = ['bookmarks', '-n', count.toString(), '--json'];
+    if (sinceId) {
+      birdArgs.push('--since-id', sinceId);
+    }
+
+    // Call bird CLI directly (works on Windows without bash)
+    return new Promise((resolve, reject) => {
+      const proc = spawn(
+        'bird',
+        birdArgs,
+        {
+          env: {
+            ...process.env,
+            AUTH_TOKEN: authToken,
+            CT0: ct0,
+          },
+          shell: true, // Use shell on Windows for finding bird in PATH
+        }
+      );
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          return reject(
+            new Error(`Bird CLI failed (exit code ${code}): ${stderr}`)
+          );
+        }
+
+        try {
+          const bookmarks: BirdBookmarkArray = JSON.parse(stdout);
+
+          if (!Array.isArray(bookmarks)) {
+            return reject(new Error('Bird CLI output is not an array'));
+          }
+
+          resolve(bookmarks);
+        } catch (err) {
+          const error = err as Error;
+          reject(new Error(`Failed to parse Bird CLI output: ${error.message}`));
+        }
+      });
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to spawn bird CLI: ${err.message}`));
+      });
+    });
+  }
+
+  /**
+   * Fetch a single tweet by ID using `bird read <id> --json`
+   */
+  static async fetchBookmarkById(
+    bookmarkId: string,
+    options: { authToken?: string; ct0?: string } = {}
+  ): Promise<BirdBookmark> {
+    const {
+      authToken = process.env.AUTH_TOKEN,
+      ct0 = process.env.CT0,
+    } = options;
+
+    if (!authToken || !ct0) {
+      throw new Error('Missing X authentication tokens');
+    }
+
+    return new Promise((resolve, reject) => {
+      const proc = spawn(
+        'bird',
+        ['read', bookmarkId, '--json'],
+        {
+          env: {
+            ...process.env,
+            AUTH_TOKEN: authToken,
+            CT0: ct0,
+          },
+          shell: true,
+        }
+      );
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          return reject(
+            new Error(`Bird CLI failed to fetch tweet ${bookmarkId}: ${stderr}`)
+          );
+        }
+
+        try {
+          const bookmark: BirdBookmark = JSON.parse(stdout);
+          resolve(bookmark);
+        } catch (err) {
+          const error = err as Error;
+          reject(new Error(`Failed to parse bird CLI output: ${error.message}`));
+        }
+      });
+
+      proc.on('error', (err) => {
+        reject(new Error(`Failed to spawn bird CLI: ${err.message}`));
+      });
+    });
+  }
+
+  /**
+   * Detect bookmarks that are just a bare t.co link (no other text) and
+   * re-fetch them using `bird read <id>` to get the full article content.
+   * This is important for X Articles, which the bookmarks API returns as stubs.
+   */
+  static async refetchFullContent(
+    bookmarks: BirdBookmark[],
+    options: { authToken?: string; ct0?: string } = {}
+  ): Promise<BirdBookmark[]> {
+    const stubPattern = /^https?:\/\/t\.co\/\w+\s*$/;
+    const stubs = bookmarks.filter((b) => stubPattern.test(b.text.trim()));
+
+    if (stubs.length === 0) return bookmarks;
+
+    console.log(`📰 Re-fetching ${stubs.length} stub bookmark(s) for full content...`);
+
+    // Re-fetch stubs in parallel (bird read is fast)
+    const refetched = await Promise.allSettled(
+      stubs.map((b) => BookmarkFetcher.fetchBookmarkById(b.id, options))
+    );
+
+    // Build a lookup map of re-fetched bookmarks
+    const fullContentMap = new Map<string, BirdBookmark>();
+    stubs.forEach((stub, idx) => {
+      const result = refetched[idx];
+      if (result.status === 'fulfilled') {
+        // Merge: keep original engagement numbers (bookmarks API is more accurate),
+        // replace text/article with the full-content version
+        fullContentMap.set(stub.id, {
+          ...result.value,
+          likeCount: stub.likeCount || result.value.likeCount,
+          retweetCount: stub.retweetCount || result.value.retweetCount,
+          replyCount: stub.replyCount || result.value.replyCount,
+          viewCount: stub.viewCount || result.value.viewCount,
+        });
+      }
+    });
+
+    // Replace stubs with full-content versions
+    return bookmarks.map((b) => fullContentMap.get(b.id) ?? b);
+  }
+
+  /**
+   * Validate that X auth tokens work by calling bird whoami
+   */
+  static async validateTokens(authToken: string, ct0: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const proc = spawn(
+        'bird',
+        ['whoami'],
+        {
+          env: { ...process.env, AUTH_TOKEN: authToken, CT0: ct0 },
+          shell: true,
+        }
+      );
+
+      let stderr = '';
+      proc.stderr.on('data', (data) => (stderr += data.toString()));
+
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Bird validation failed: ${stderr}`));
+        }
+      });
+
+      proc.on('error', (err) => reject(err));
+    });
+  }
+}
