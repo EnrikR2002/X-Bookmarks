@@ -15,7 +15,7 @@ const commands = [
     .addIntegerOption((option) =>
       option
         .setName('count')
-        .setDescription('Number of bookmarks to fetch (default: 50)')
+        .setDescription('Number of bookmarks to fetch (default: 10)')
         .setRequired(false)
         .setMinValue(1)
         .setMaxValue(100)

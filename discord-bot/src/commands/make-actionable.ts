@@ -1,15 +1,14 @@
 /**
  * /make-actionable command handler
- * Generates an Opus-ready prompt for a specific bookmark
+ * Deep single-bookmark analysis: Groq reads full content and returns specific action ideas
  */
 
-import { ChatInputCommandInteraction, CacheType } from 'discord.js';
+import { ChatInputCommandInteraction, CacheType, AttachmentBuilder } from 'discord.js';
 import { BookmarkFetcher } from '../services/bookmark-fetcher.js';
 import { ClaudeAnalyzer } from '../services/claude-analyzer.js';
 import { DigestFormatter } from '../services/digest-formatter.js';
 import { UserStore } from '../database/user-store.js';
 import { UsageStore } from '../database/usage-store.js';
-import { BookmarkStore } from '../database/bookmark-store.js';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -47,61 +46,73 @@ export async function handleMakeActionable(
     const user = UserStore.getOrCreateUser(discordUserId);
 
     // Fetch the specific bookmark
+    await interaction.editReply('⏳ Fetching bookmark...');
     const bookmark = await BookmarkFetcher.fetchBookmarkById(bookmarkId, {
       authToken: user.auth_token,
       ct0: user.ct0,
     });
 
-    // Check cache first to avoid re-analyzing
-    let analysis = BookmarkStore.getAnalysis(discordUserId, bookmark.id);
+    // Deep analysis: Groq reads full content, returns specific action ideas
+    await interaction.editReply('🔍 Reading full content and generating action ideas...');
 
-    if (!analysis) {
-      await interaction.editReply(`⏳ Analyzing bookmark...`);
+    const analyzer = new ClaudeAnalyzer();
+    const { category, summary, actionIdeas, inputTokens, outputTokens, totalCost } =
+      await analyzer.analyzeForActionable(bookmark);
 
-      const analyzer = new ClaudeAnalyzer();
-      const { analyses, inputTokens, outputTokens, totalCost } =
-        await analyzer.analyzeBookmarks([bookmark]);
+    // Log usage
+    UsageStore.logUsage({
+      userId: discordUserId,
+      model: GROQ_MODEL,
+      inputTokens,
+      outputTokens,
+      costUsd: totalCost,
+      operation: 'make-actionable',
+    });
 
-      analysis = analyses[0]!;
+    // Build Opus prompt (contains full content + action ideas)
+    const opusPrompt = buildOpusPrompt(bookmark, { category, summary, actionIdeas });
 
-      // Save to cache
-      BookmarkStore.saveAnalyses(discordUserId, [analysis]);
+    // Build and send the summary embed
+    const embed = DigestFormatter.buildActionableEmbed(
+      {
+        category,
+        summary,
+        authorUsername: bookmark.author.username,
+        likeCount: bookmark.likeCount,
+        retweetCount: bookmark.retweetCount,
+        text: bookmark.text,
+        bookmarkId: bookmark.id,
+      },
+      actionIdeas,
+      opusPrompt
+    );
 
-      // Log usage
-      UsageStore.logUsage({
-        userId: discordUserId,
-        model: GROQ_MODEL,
-        inputTokens,
-        outputTokens,
-        costUsd: totalCost,
-        operation: 'make-actionable',
-      });
-    } else {
-      console.log(`✅ Cache hit for bookmark ${bookmark.id}`);
-    }
+    await interaction.editReply({ content: '', embeds: [embed] });
 
-    // Build Opus-ready prompt
-    const opusPrompt = buildOpusPrompt(bookmark, analysis);
-
-    // Build and send embed
-    const embed = DigestFormatter.buildActionableEmbed(analysis, opusPrompt);
-
-    await interaction.editReply({ embeds: [embed] });
+    // Send full Opus prompt as a downloadable .txt file (no Discord 2000-char limit)
+    const promptBuffer = Buffer.from(opusPrompt, 'utf-8');
+    const attachment = new AttachmentBuilder(promptBuffer, {
+      name: `opus-prompt-${bookmarkId}.txt`,
+    });
+    await interaction.followUp({
+      content: `**Opus prompt for \`${bookmarkId}\`** — open the file, select all, paste into Claude:`,
+      files: [attachment],
+    });
 
     console.log(
-      `✅ Actionable prompt sent to ${interaction.user.tag} for bookmark ${bookmarkId}`
+      `✅ Actionable analysis sent to ${interaction.user.tag} for ${bookmarkId} (${actionIdeas.length} ideas)`
     );
   } catch (error) {
     const err = error as Error;
     console.error('Error in make-actionable command:', err);
 
     const embed = DigestFormatter.buildStatusEmbed(
-      `❌ Failed to generate actionable prompt:\n${err.message}`,
+      `❌ Failed to generate actionable analysis:\n${err.message}`,
       true
     );
 
     if (interaction.deferred) {
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({ content: '', embeds: [embed] });
     } else {
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
@@ -112,40 +123,31 @@ export async function handleMakeActionable(
  * Extract tweet ID from URL or return raw ID
  */
 function extractTweetId(input: string): string | null {
-  // If it's already just an ID (numeric string)
-  if (/^\d+$/.test(input)) {
-    return input;
-  }
-
-  // Try to extract from URL
+  if (/^\d+$/.test(input)) return input;
   const urlMatch = input.match(/status\/(\d+)/);
-  if (urlMatch) {
-    return urlMatch[1];
-  }
-
-  return null;
+  return urlMatch ? urlMatch[1]! : null;
 }
 
 /**
- * Build a comprehensive Opus-ready prompt
+ * Build the Opus prompt with full content + Groq's action ideas embedded
  */
-function buildOpusPrompt(bookmark: any, analysis: any): string {
-  return `You're analyzing this bookmarked tweet for actionable insights:
+function buildOpusPrompt(
+  bookmark: any,
+  analysis: { category: string; summary: string; actionIdeas: string[] }
+): string {
+  const ideasText = analysis.actionIdeas.join('\n');
 
-**Author:** @${bookmark.author.username} (${bookmark.author.name})
-**Tweet:** ${bookmark.text}
-**Engagement:** ${bookmark.likeCount} likes, ${bookmark.retweetCount} retweets
-**Category:** ${analysis.category}
+  return `I bookmarked this content and want to take action on it.
 
-**Your task:**
-1. Extract the core insight or framework from this tweet
-2. Identify specific action steps I can take
-3. If it's a tool/repo: create a setup plan and testing approach
-4. If it's strategy: build an implementation roadmap
-5. If it's content idea: draft an outline in my voice
-6. If it's a question/discussion: research deeper and summarize findings
+Author: @${bookmark.author.username} (${bookmark.author.name})
+Category: ${analysis.category}
+Engagement: ${bookmark.likeCount} likes, ${bookmark.retweetCount} retweets
 
-**Goal:** Deliver a comprehensive action plan, not just a summary. Be specific and tactical.
+Content:
+${bookmark.text}
 
-What should I do with this bookmark?`;
+Suggested actions (Groq's analysis):
+${ideasText}
+
+Pick the most valuable action above and help me actually execute it. Be specific and tactical — give me concrete next steps, commands, or a plan. Don't just summarize.`;
 }

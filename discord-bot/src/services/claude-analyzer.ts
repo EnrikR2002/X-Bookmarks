@@ -317,6 +317,78 @@ Array must have exactly ${bookmarks.length} objects.`;
   }
 
   /**
+   * Deep single-bookmark analysis for /make-actionable.
+   * Passes full (untruncated) content to Groq and returns specific action ideas.
+   */
+  async analyzeForActionable(bookmark: BirdBookmark): Promise<ActionableAnalysis> {
+    // Re-fetch if stub (bare t.co link)
+    const [enriched] = await import('./bookmark-fetcher.js').then(
+      (m) => m.BookmarkFetcher.refetchFullContent([bookmark])
+    );
+
+    // URL enrichment
+    const urlEnrichments = await enrichBookmarksWithUrls([enriched]);
+    const urlContext = urlEnrichments.get(enriched.id) || '';
+
+    // Build full content block — no truncation
+    let contentBlock: string;
+    if (enriched.article) {
+      contentBlock = `X Article: "${enriched.article.title}"\n${enriched.text}`;
+    } else {
+      contentBlock = enriched.text;
+    }
+    if (urlContext) contentBlock += `\n\nLink context:\n${urlContext}`;
+    if (enriched.quotedTweet) {
+      const qt = enriched.quotedTweet;
+      contentBlock += `\n\nQuoted tweet by @${qt.author.username}: "${qt.text}"`;
+    }
+
+    const prompt = buildActionablePrompt(enriched, contentBlock);
+
+    let response;
+    try {
+      response = await this.client.chat.completions.create({
+        model: GROQ_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.4,
+        max_tokens: 1024,
+        response_format: { type: 'json_object' },
+      });
+    } catch (err: unknown) {
+      const e = err as { status?: number };
+      if (e?.status === 429) {
+        console.log('⚠️ Groq 429 — waiting 65s then retrying...');
+        await sleep(65_000);
+        response = await this.client.chat.completions.create({
+          model: GROQ_MODEL,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.4,
+          max_tokens: 1024,
+          response_format: { type: 'json_object' },
+        });
+      } else {
+        throw err;
+      }
+    }
+
+    let raw: any = {};
+    try {
+      raw = JSON.parse(response.choices[0]?.message?.content || '{}');
+    } catch {
+      // fallback below
+    }
+
+    return {
+      category: (raw.category as BookmarkCategory) || 'other',
+      summary: raw.summary || enriched.text.slice(0, 80),
+      actionIdeas: Array.isArray(raw.actionIdeas) ? raw.actionIdeas : [],
+      inputTokens: response.usage?.prompt_tokens ?? 0,
+      outputTokens: response.usage?.completion_tokens ?? 0,
+      totalCost: 0,
+    };
+  }
+
+  /**
    * Parse the JSON response into analysis objects
    */
   private parseResponse(
@@ -366,4 +438,40 @@ Array must have exactly ${bookmarks.length} objects.`;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface ActionableAnalysis {
+  category: BookmarkCategory;
+  summary: string;
+  actionIdeas: string[];
+  inputTokens: number;
+  outputTokens: number;
+  totalCost: number;
+}
+
+function buildActionablePrompt(bookmark: BirdBookmark, fullContent: string): string {
+  return `You are helping a user decide what to DO with this bookmarked content. Read it fully.
+
+Author: @${bookmark.author.username} (${bookmark.author.name})
+Engagement: ${bookmark.likeCount} likes, ${bookmark.retweetCount} retweets
+
+FULL CONTENT:
+${fullContent}
+
+Generate a JSON response:
+{
+  "category": "AI" | "crypto" | "marketing" | "tools" | "personal" | "news" | "content-ideas" | "other",
+  "summary": "10-15 word title describing the specific topic",
+  "actionIdeas": [
+    "A. [Specific verb-first action using details from the content]",
+    "B. [Another specific action]",
+    "C. [Another specific action]"
+  ]
+}
+
+Rules for actionIdeas:
+- Each must be specific to THIS content — use names, URLs, techniques actually mentioned
+- Start with a verb: Read, Try, Build, Apply, Research, Watch, Clone, Implement...
+- 3 ideas minimum, 5 maximum
+- Be tactical, not generic ("Clone the repo at github.com/X and run Y" not "Look into it")`;
 }

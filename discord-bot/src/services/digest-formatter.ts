@@ -167,41 +167,47 @@ export class DigestFormatter {
    * Build an embed for a single actionable bookmark (used in /make-actionable)
    */
   static buildActionableEmbed(
-    analysis: BookmarkAnalysis,
+    analysis: {
+      category: string;
+      summary: string;
+      authorUsername: string;
+      likeCount: number;
+      retweetCount: number;
+      text: string;
+      bookmarkId: string;
+    },
+    actionIdeas: string[],
     opusPrompt: string
   ): EmbedBuilder {
+    const contentPreview = analysis.text.length > 500
+      ? analysis.text.slice(0, 500) + '...'
+      : analysis.text;
+
+    const ideasValue = actionIdeas.length > 0
+      ? actionIdeas.join('\n')
+      : 'No specific actions identified.';
+
     const embed = new EmbedBuilder()
-      .setTitle('🎯 Actionable Bookmark')
+      .setTitle(`🎯 ${analysis.summary}`)
       .setColor(TWITTER_BLUE)
       .setDescription(
-        `**Category:** ${analysis.category}\n` +
-        `**From:** @${analysis.authorUsername}\n\n` +
-        `${analysis.text.slice(0, 300)}${analysis.text.length > 300 ? '...' : ''}`
+        `**@${analysis.authorUsername}** | **${analysis.category}** | ❤️ ${analysis.likeCount} 🔁 ${analysis.retweetCount}\n\n` +
+        `${contentPreview}`
       )
       .addFields(
         {
-          name: '📊 Engagement',
-          value: `❤️ ${analysis.likeCount} | 🔁 ${analysis.retweetCount}`,
-          inline: true,
-        },
-        {
-          name: '🤖 Summary',
-          value: `${analysis.summary}\n\n${analysis.keyTakeaway}`,
+          name: '🎯 Action Ideas',
+          value: ideasValue.slice(0, MAX_FIELD_LENGTH),
           inline: false,
         },
         {
-          name: '✨ Suggested Action',
-          value: analysis.action,
-          inline: false,
-        },
-        {
-          name: '🚀 Opus-Ready Prompt',
-          value: `\`\`\`\n${opusPrompt.slice(0, 900)}${opusPrompt.length > 900 ? '...' : ''}\n\`\`\``,
+          name: '🚀 Opus Prompt (preview)',
+          value: `\`\`\`\n${opusPrompt.slice(0, 800)}${opusPrompt.length > 800 ? '\n...' : ''}\n\`\`\``,
           inline: false,
         }
       )
       .setFooter({
-        text: 'Copy the prompt above and paste it into Claude Code (Opus) for deep analysis',
+        text: 'Full prompt sent below — copy and paste into Claude Opus',
       })
       .setTimestamp();
 

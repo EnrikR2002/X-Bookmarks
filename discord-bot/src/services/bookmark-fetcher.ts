@@ -24,7 +24,7 @@ export class BookmarkFetcher {
     options: FetchBookmarksOptions = {}
   ): Promise<BirdBookmark[]> {
     const {
-      count = 50,
+      count = 10,
       authToken = process.env.AUTH_TOKEN,
       ct0 = process.env.CT0,
       sinceId,
@@ -37,9 +37,7 @@ export class BookmarkFetcher {
     }
 
     const birdArgs = ['bookmarks', '-n', count.toString(), '--json'];
-    if (sinceId) {
-      birdArgs.push('--since-id', sinceId);
-    }
+    // Note: bird CLI has no --since-id flag; incremental filtering is done client-side below
 
     // Call bird CLI directly (works on Windows without bash)
     return new Promise((resolve, reject) => {
@@ -79,6 +77,14 @@ export class BookmarkFetcher {
 
           if (!Array.isArray(bookmarks)) {
             return reject(new Error('Bird CLI output is not an array'));
+          }
+
+          // Filter to only bookmarks newer than sinceId (client-side, since bird has no --since-id)
+          // Tweet IDs are snowflakes — numerically larger = newer
+          if (sinceId) {
+            const sinceIdBig = BigInt(sinceId);
+            const filtered = bookmarks.filter((b) => BigInt(b.id) > sinceIdBig);
+            return resolve(filtered);
           }
 
           resolve(bookmarks);

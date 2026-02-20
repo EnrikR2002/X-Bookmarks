@@ -5,6 +5,7 @@ import { BookmarkFetcher } from './bookmark-fetcher.js';
 import { ClaudeAnalyzer } from './claude-analyzer.js';
 import { DigestFormatter } from './digest-formatter.js';
 import { UsageStore } from '../database/usage-store.js';
+import { BookmarkStore } from '../database/bookmark-store.js';
 
 const GROQ_MODEL = 'llama-3.3-70b-versatile';
 
@@ -78,28 +79,31 @@ export class Scheduler {
 
     console.log(`📬 Running scheduled digest for user ${user.discord_id}...`);
 
-    // Get user record for sinceId
-    const userRecord = UserStore.getOrCreateUser(user.discord_id);
-
-    // Fetch new bookmarks (incremental)
+    // Fetch bookmarks — dedup via BookmarkStore handles incrementality
     const bookmarks = await BookmarkFetcher.fetchBookmarks({
       count: 50,
       authToken: user.auth_token,
       ct0: user.ct0,
-      sinceId: userRecord.last_seen_bookmark_id || undefined,
     });
 
-    if (bookmarks.length === 0) {
+    // Filter out already-analyzed bookmarks
+    const alreadyAnalyzed = BookmarkStore.hasBeenAnalyzed(
+      user.discord_id,
+      bookmarks.map((b) => b.id)
+    );
+    const newBookmarks = bookmarks.filter((b) => !alreadyAnalyzed.has(b.id));
+
+    if (newBookmarks.length === 0) {
       console.log(`  (No new bookmarks for ${user.discord_id})`);
       return;
     }
 
-    console.log(`  Fetched ${bookmarks.length} new bookmarks`);
+    console.log(`  Fetched ${newBookmarks.length} new bookmarks (${bookmarks.length - newBookmarks.length} skipped)`);
 
     // Analyze (ClaudeAnalyzer handles URL enrichment + stub refetch internally)
     const analyzer = new ClaudeAnalyzer();
     const { analyses, inputTokens, outputTokens, totalCost } =
-      await analyzer.analyzeBookmarks(bookmarks);
+      await analyzer.analyzeBookmarks(newBookmarks);
 
     // Build category counts for stats
     const categoryCounts = analyses.reduce((acc, a) => {
@@ -108,7 +112,7 @@ export class Scheduler {
     }, {} as Record<string, number>);
 
     const embeds = DigestFormatter.buildDigestEmbeds(analyses, {
-      newCount: bookmarks.length,
+      newCount: newBookmarks.length,
       cost: totalCost,
       monthlyTotal: UsageStore.getMonthlyTotal(user.discord_id),
       categoryCounts: categoryCounts as any,
@@ -125,7 +129,7 @@ export class Scheduler {
     }
 
     // Update user record
-    UserStore.updateLastSeenBookmarkId(user.discord_id, bookmarks[0]!.id);
+    UserStore.updateLastSeenBookmarkId(user.discord_id, newBookmarks[0]!.id);
     UserStore.updateLastDigestAt(user.discord_id);
 
     // Log usage

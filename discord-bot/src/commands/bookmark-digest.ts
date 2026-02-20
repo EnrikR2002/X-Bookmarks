@@ -38,23 +38,14 @@ export async function handleBookmarkDigest(
     const user = UserStore.getOrCreateUser(discordUserId);
     const { auth_token: authToken, ct0 } = user;
 
-    // Step 1: Fetch bookmarks via bird CLI (incremental via sinceId)
+    // Step 1: Fetch bookmarks via bird CLI
+    // Deduplication is handled by BookmarkStore.hasBeenAnalyzed below, not by sinceId filtering
     await interaction.editReply('🔍 Fetching bookmarks...');
     const bookmarks = await BookmarkFetcher.fetchBookmarks({
       count,
       authToken,
       ct0,
-      sinceId: user.last_seen_bookmark_id || undefined,
     });
-
-    if (bookmarks.length === 0) {
-      const embed = DigestFormatter.buildStatusEmbed(
-        '✨ No new bookmarks since last digest!',
-        false
-      );
-      await interaction.editReply({ content: '', embeds: [embed] });
-      return;
-    }
 
     // Step 2: Analyze with Groq (with progress updates)
     await interaction.editReply(`🔍 Fetched ${bookmarks.length} bookmarks — preparing analysis...`);
