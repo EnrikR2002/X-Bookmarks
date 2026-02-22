@@ -40,11 +40,7 @@ FROM base
 # Copy built application
 COPY --from=build /app /app
 
-# Setup sqlite3 on a separate volume
-RUN mkdir -p /data
-VOLUME /data
+# Install bird CLI for X bookmark fetching
+RUN npm install -g @steipete/bird
 
-# Start the server by default, this can be overwritten at runtime
-EXPOSE 3000
-ENV DATABASE_URL="file:///data/sqlite.db"
 CMD [ "npm", "run", "start" ]
