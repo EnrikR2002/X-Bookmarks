@@ -99,9 +99,13 @@ export class ClaudeAnalyzer {
     );
 
     // Step 2: Enrich bookmarks with URL metadata (for non-article external links)
+    // x.com status URLs are fetched via bird read instead of HTML scraping
     console.log(`🔗 Enriching ${enrichedBookmarks.length} bookmarks with URL metadata...`);
     this.onProgress?.(0, enrichedBookmarks.length, 'Fetching link previews...');
-    const urlEnrichments = await enrichBookmarksWithUrls(enrichedBookmarks);
+    const urlEnrichments = await enrichBookmarksWithUrls(enrichedBookmarks, {
+      authToken: process.env.AUTH_TOKEN,
+      ct0: process.env.CT0,
+    });
     console.log(`🔗 Enriched ${urlEnrichments.size} bookmarks with link context`);
 
     const allAnalyses: BookmarkAnalysis[] = [];
@@ -326,8 +330,11 @@ Array must have exactly ${bookmarks.length} objects.`;
       (m) => m.BookmarkFetcher.refetchFullContent([bookmark])
     );
 
-    // URL enrichment
-    const urlEnrichments = await enrichBookmarksWithUrls([enriched]);
+    // URL enrichment — pass auth so x.com status links use bird read
+    const urlEnrichments = await enrichBookmarksWithUrls([enriched], {
+      authToken: process.env.AUTH_TOKEN,
+      ct0: process.env.CT0,
+    });
     const urlContext = urlEnrichments.get(enriched.id) || '';
 
     // Build full content block — no truncation

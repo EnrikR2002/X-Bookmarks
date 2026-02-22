@@ -22,7 +22,10 @@ export async function handleBookmarkDigest(
     await interaction.deferReply();
 
     const discordUserId = interaction.user.id;
-    const count = (interaction.options.get('count')?.value as number) || 50;
+    // How many NEW bookmarks to analyze
+    const analysisTarget = (interaction.options.get('count')?.value as number) || 10;
+    // Fetch a buffer to account for already-analyzed ones (fetch 4x or at least 50)
+    const fetchCount = Math.max(analysisTarget * 4, 50);
 
     // Ensure user has registered X tokens
     if (!UserStore.hasAuthTokens(discordUserId)) {
@@ -38,11 +41,10 @@ export async function handleBookmarkDigest(
     const user = UserStore.getOrCreateUser(discordUserId);
     const { auth_token: authToken, ct0 } = user;
 
-    // Step 1: Fetch bookmarks via bird CLI
-    // Deduplication is handled by BookmarkStore.hasBeenAnalyzed below, not by sinceId filtering
+    // Step 1: Fetch bookmarks via bird CLI (fetch extra buffer to find new ones)
     await interaction.editReply('🔍 Fetching bookmarks...');
     const bookmarks = await BookmarkFetcher.fetchBookmarks({
-      count,
+      count: fetchCount,
       authToken,
       ct0,
     });
@@ -69,22 +71,23 @@ export async function handleBookmarkDigest(
       }
     });
 
-    // Check for already-analyzed bookmarks (skip re-analysis)
+    // Check for already-analyzed bookmarks (skip re-analysis), cap at analysisTarget
     const alreadyAnalyzed = BookmarkStore.hasBeenAnalyzed(
       discordUserId,
       bookmarks.map((b) => b.id)
     );
 
-    const newBookmarks = bookmarks.filter((b) => !alreadyAnalyzed.has(b.id));
-    const skippedCount = bookmarks.length - newBookmarks.length;
+    const newBookmarks = bookmarks
+      .filter((b) => !alreadyAnalyzed.has(b.id))
+      .slice(0, analysisTarget);
 
-    if (skippedCount > 0) {
-      console.log(`⏭️ Skipped ${skippedCount} already-analyzed bookmarks`);
+    if (alreadyAnalyzed.size > 0) {
+      console.log(`⏭️ Skipped ${alreadyAnalyzed.size} already-analyzed bookmarks`);
     }
 
     if (newBookmarks.length === 0) {
       const embed = DigestFormatter.buildStatusEmbed(
-        `✨ All ${bookmarks.length} bookmarks have already been analyzed!`,
+        `✨ All caught up! No new bookmarks to analyze (checked last ${bookmarks.length}).`,
         false
       );
       await interaction.editReply({ content: '', embeds: [embed] });
@@ -123,7 +126,7 @@ export async function handleBookmarkDigest(
     }, {} as Record<string, number>);
 
     const stats: DigestStats = {
-      newCount: bookmarks.length,
+      newCount: analyses.length,
       cost: totalCost,
       monthlyTotal,
       categoryCounts: categoryCounts as any,

@@ -6,6 +6,7 @@
 
 import https from 'https';
 import http from 'http';
+import { spawn } from 'child_process';
 import { BirdBookmark } from '../types/bird-cli.js';
 
 interface UrlMetadata {
@@ -14,6 +15,14 @@ interface UrlMetadata {
   title: string | null;
   description: string | null;
 }
+
+interface XAuthOptions {
+  authToken?: string;
+  ct0?: string;
+}
+
+// Matches https://x.com/username/status/<id> and https://twitter.com/username/status/<id>
+const X_STATUS_PATTERN = /^https?:\/\/(?:twitter\.com|x\.com)\/\w+\/status\/(\d+)/i;
 
 const FETCH_TIMEOUT = 5000; // 5s per URL
 const MAX_BODY_SIZE = 50000; // Only read first 50KB for meta tags
@@ -41,9 +50,17 @@ function extractUrls(bookmark: BirdBookmark): string[] {
 async function fetchUrlMetadata(
   url: string,
   originalUrl?: string,
-  redirectsLeft: number = 5
+  redirectsLeft: number = 5,
+  authOptions?: XAuthOptions
 ): Promise<UrlMetadata> {
   const origin = originalUrl || url;
+
+  // Short-circuit: x.com/twitter.com status URLs won't return useful HTML — use bird CLI
+  const xMatch = url.match(X_STATUS_PATTERN);
+  if (xMatch && authOptions?.authToken && authOptions?.ct0) {
+    const meta = await fetchXTweetContent(url, xMatch[1], authOptions);
+    return { ...meta, url: origin };
+  }
 
   return new Promise((resolve) => {
     let parsedUrl: URL;
@@ -81,7 +98,7 @@ async function fetchUrlMetadata(
             redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${redirectUrl}`;
           }
           res.destroy();
-          fetchUrlMetadata(redirectUrl, origin, redirectsLeft - 1).then(resolve);
+          fetchUrlMetadata(redirectUrl, origin, redirectsLeft - 1, authOptions).then(resolve);
           return;
         }
 
@@ -178,11 +195,67 @@ function decodeHtmlEntities(text: string): string {
 }
 
 /**
+ * Fetch tweet/article content for an x.com or twitter.com status URL using bird read.
+ * Returns a UrlMetadata with the tweet text/article title as title+description.
+ */
+async function fetchXTweetContent(
+  url: string,
+  tweetId: string,
+  authOptions: XAuthOptions
+): Promise<UrlMetadata> {
+  const { authToken, ct0 } = authOptions;
+  if (!authToken || !ct0) {
+    return { url, domain: 'x.com', title: null, description: null };
+  }
+
+  return new Promise((resolve) => {
+    const proc = spawn('bird', ['read', tweetId, '--json'], {
+      env: { ...process.env, AUTH_TOKEN: authToken, CT0: ct0 },
+      shell: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+    proc.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+
+    proc.on('close', (code: number | null) => {
+      if (code !== 0) {
+        console.warn(`⚠️ bird read ${tweetId} failed (code ${code}): ${stderr.slice(0, 100)}`);
+        resolve({ url, domain: 'x.com', title: null, description: null });
+        return;
+      }
+      try {
+        const tweet = JSON.parse(stdout) as BirdBookmark;
+        let title: string;
+        let description: string;
+        if (tweet.article) {
+          title = `X Article: "${tweet.article.title}"`;
+          description = tweet.article.previewText || tweet.text.slice(0, 300);
+        } else {
+          const snippet = tweet.text.slice(0, 100);
+          title = `@${tweet.author.username}: "${snippet}${tweet.text.length > 100 ? '...' : ''}"`;
+          description = tweet.text.slice(0, 300);
+        }
+        resolve({ url, domain: 'x.com', title, description });
+      } catch {
+        resolve({ url, domain: 'x.com', title: null, description: null });
+      }
+    });
+
+    proc.on('error', () => {
+      resolve({ url, domain: 'x.com', title: null, description: null });
+    });
+  });
+}
+
+/**
  * Enrich bookmarks with URL metadata
  * Returns a map of bookmark ID -> enrichment string
  */
 export async function enrichBookmarksWithUrls(
-  bookmarks: BirdBookmark[]
+  bookmarks: BirdBookmark[],
+  authOptions?: XAuthOptions
 ): Promise<Map<string, string>> {
   const enrichments = new Map<string, string>();
 
@@ -201,7 +274,9 @@ export async function enrichBookmarksWithUrls(
 
   for (let i = 0; i < allUrls.length; i += 5) {
     const batch = allUrls.slice(i, i + 5);
-    const results = await Promise.all(batch.map((u) => fetchUrlMetadata(u)));
+    const results = await Promise.all(
+      batch.map((u) => fetchUrlMetadata(u, undefined, 5, authOptions))
+    );
     for (const meta of results) {
       metadataCache.set(meta.url, meta);
     }
