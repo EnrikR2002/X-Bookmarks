@@ -103,7 +103,7 @@ export class Scheduler {
     // Analyze (ClaudeAnalyzer handles URL enrichment + stub refetch internally)
     const analyzer = new ClaudeAnalyzer();
     const { analyses, inputTokens, outputTokens, totalCost } =
-      await analyzer.analyzeBookmarks(newBookmarks);
+      await analyzer.analyzeBookmarks(newBookmarks, { authToken: user.auth_token, ct0: user.ct0 });
 
     // Build category counts for stats
     const categoryCounts = analyses.reduce((acc, a) => {

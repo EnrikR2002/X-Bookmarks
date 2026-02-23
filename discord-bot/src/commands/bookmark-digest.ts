@@ -26,6 +26,7 @@ export async function handleBookmarkDigest(
     const analysisTarget = (interaction.options.get('count')?.value as number) || 10;
     // Fetch a buffer to account for already-analyzed ones (fetch 4x or at least 50)
     const fetchCount = Math.max(analysisTarget * 4, 50);
+    const force = (interaction.options.get('force')?.value as boolean) || false;
 
     // Ensure user has registered X tokens
     if (!UserStore.hasAuthTokens(discordUserId)) {
@@ -72,10 +73,10 @@ export async function handleBookmarkDigest(
     });
 
     // Check for already-analyzed bookmarks (skip re-analysis), cap at analysisTarget
-    const alreadyAnalyzed = BookmarkStore.hasBeenAnalyzed(
-      discordUserId,
-      bookmarks.map((b) => b.id)
-    );
+    // force=true bypasses the cache entirely
+    const alreadyAnalyzed = force
+      ? new Set<string>()
+      : BookmarkStore.hasBeenAnalyzed(discordUserId, bookmarks.map((b) => b.id));
 
     const newBookmarks = bookmarks
       .filter((b) => !alreadyAnalyzed.has(b.id))
@@ -95,7 +96,7 @@ export async function handleBookmarkDigest(
     }
 
     const { analyses, totalCost, inputTokens, outputTokens } =
-      await analyzer.analyzeBookmarks(newBookmarks);
+      await analyzer.analyzeBookmarks(newBookmarks, { authToken, ct0 });
 
     // Save to cache for future dedup + stats
     BookmarkStore.saveAnalyses(discordUserId, analyses);

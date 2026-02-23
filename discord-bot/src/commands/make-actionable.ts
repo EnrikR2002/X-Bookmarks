@@ -57,7 +57,7 @@ export async function handleMakeActionable(
 
     const analyzer = new ClaudeAnalyzer();
     const { category, summary, actionIdeas, inputTokens, outputTokens, totalCost } =
-      await analyzer.analyzeForActionable(bookmark);
+      await analyzer.analyzeForActionable(bookmark, { authToken: user.auth_token, ct0: user.ct0 });
 
     // Log usage
     UsageStore.logUsage({

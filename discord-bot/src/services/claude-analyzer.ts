@@ -85,7 +85,8 @@ export class ClaudeAnalyzer {
    * Analyze bookmarks in batches using Groq
    */
   async analyzeBookmarks(
-    bookmarks: BirdBookmark[]
+    bookmarks: BirdBookmark[],
+    authOptions?: { authToken?: string; ct0?: string }
   ): Promise<{
     analyses: BookmarkAnalysis[];
     totalCost: number;
@@ -95,17 +96,14 @@ export class ClaudeAnalyzer {
     // Step 1: Re-fetch any stub bookmarks (bare t.co links) to get full article content
     this.onProgress?.(0, bookmarks.length, 'Fetching full article content...');
     const enrichedBookmarks = await import('./bookmark-fetcher.js').then(
-      (m) => m.BookmarkFetcher.refetchFullContent(bookmarks)
+      (m) => m.BookmarkFetcher.refetchFullContent(bookmarks, authOptions)
     );
 
     // Step 2: Enrich bookmarks with URL metadata (for non-article external links)
     // x.com status URLs are fetched via bird read instead of HTML scraping
     console.log(`🔗 Enriching ${enrichedBookmarks.length} bookmarks with URL metadata...`);
     this.onProgress?.(0, enrichedBookmarks.length, 'Fetching link previews...');
-    const urlEnrichments = await enrichBookmarksWithUrls(enrichedBookmarks, {
-      authToken: process.env.AUTH_TOKEN,
-      ct0: process.env.CT0,
-    });
+    const urlEnrichments = await enrichBookmarksWithUrls(enrichedBookmarks, authOptions);
     console.log(`🔗 Enriched ${urlEnrichments.size} bookmarks with link context`);
 
     const allAnalyses: BookmarkAnalysis[] = [];
@@ -324,17 +322,17 @@ Array must have exactly ${bookmarks.length} objects.`;
    * Deep single-bookmark analysis for /make-actionable.
    * Passes full (untruncated) content to Groq and returns specific action ideas.
    */
-  async analyzeForActionable(bookmark: BirdBookmark): Promise<ActionableAnalysis> {
+  async analyzeForActionable(
+    bookmark: BirdBookmark,
+    authOptions?: { authToken?: string; ct0?: string }
+  ): Promise<ActionableAnalysis> {
     // Re-fetch if stub (bare t.co link)
     const [enriched] = await import('./bookmark-fetcher.js').then(
-      (m) => m.BookmarkFetcher.refetchFullContent([bookmark])
+      (m) => m.BookmarkFetcher.refetchFullContent([bookmark], authOptions)
     );
 
     // URL enrichment — pass auth so x.com status links use bird read
-    const urlEnrichments = await enrichBookmarksWithUrls([enriched], {
-      authToken: process.env.AUTH_TOKEN,
-      ct0: process.env.CT0,
-    });
+    const urlEnrichments = await enrichBookmarksWithUrls([enriched], authOptions);
     const urlContext = urlEnrichments.get(enriched.id) || '';
 
     // Build full content block — no truncation

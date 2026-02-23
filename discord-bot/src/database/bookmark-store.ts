@@ -80,6 +80,17 @@ export class BookmarkStore {
     return new Set(rows.map((r) => r.bookmark_id));
   }
 
+  /**
+   * Clear all analyzed bookmarks for a user (for cache reset / re-analysis)
+   */
+  static clearAll(discordUserId: string): number {
+    const db = getDb();
+    const result = db
+      .prepare(`DELETE FROM analyzed_bookmarks WHERE discord_user_id = ?`)
+      .run(discordUserId);
+    return result.changes;
+  }
+
   static getRecentAnalyses(discordUserId: string, limit: number = 100): BookmarkAnalysis[] {
     const db = getDb();
     const rows = db
