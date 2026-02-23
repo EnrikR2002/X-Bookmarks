@@ -137,16 +137,24 @@ export class BookmarkFetcher {
 
       // Kill bird process if it takes too long (15s timeout)
       const timeout = setTimeout(() => {
-        try {
-          if (useDetached && proc.pid) {
-            // Kill entire process group: shell + bird grandchild
+        // Attempt to kill process group if detached
+        if (useDetached && proc.pid) {
+          try {
             process.kill(-proc.pid, 'SIGKILL');
-          } else {
-            proc.kill();
+          } catch (err) {
+            // Swallow error - process may already be dead
+            console.warn(`Failed to kill process group for bookmark ${bookmarkId}:`, err);
           }
-        } catch {
-          proc.kill();
         }
+
+        // Also attempt regular kill
+        try {
+          proc.kill();
+        } catch (err) {
+          // Swallow error - process may already be dead
+          console.warn(`Failed to kill process for bookmark ${bookmarkId}:`, err);
+        }
+
         reject(new Error(`bird read ${bookmarkId} timed out after 15s`));
       }, 15_000);
 
