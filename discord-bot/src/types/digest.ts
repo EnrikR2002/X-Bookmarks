@@ -20,5 +20,4 @@ export interface DigestResult {
 export interface CategoryGroup {
   category: BookmarkCategory;
   items: BookmarkAnalysis[];
-  emoji: string;
 }

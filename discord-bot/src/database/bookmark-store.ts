@@ -25,7 +25,7 @@ export class BookmarkStore {
         analysis.isActionable ? 1 : 0,
         analysis.summary,
         analysis.keyTakeaway,
-        analysis.action,
+        JSON.stringify(analysis.actions),
         analysis.author,
         analysis.authorUsername,
         analysis.text,
@@ -52,7 +52,7 @@ export class BookmarkStore {
       isActionable: !!row.is_actionable,
       summary: row.summary,
       keyTakeaway: row.key_takeaway,
-      action: row.action,
+      actions: parseStoredActions(row.action),
       author: row.author,
       authorUsername: row.author_username,
       text: row.tweet_text,
@@ -107,7 +107,7 @@ export class BookmarkStore {
       isActionable: !!row.is_actionable,
       summary: row.summary,
       keyTakeaway: row.key_takeaway,
-      action: row.action,
+      actions: parseStoredActions(row.action),
       author: row.author,
       authorUsername: row.author_username,
       text: row.tweet_text,
@@ -116,4 +116,25 @@ export class BookmarkStore {
       createdAt: row.created_at,
     }));
   }
+}
+
+function parseStoredActions(value: unknown): string[] {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return ['Review this bookmark and decide the most relevant next step.'];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      const normalized = parsed
+        .map((entry) => String(entry || '').trim())
+        .filter((entry) => entry.length > 0)
+        .slice(0, 5);
+      if (normalized.length > 0) return normalized;
+    }
+  } catch {
+    // Backward compatibility: old rows stored a plain text action string.
+  }
+
+  return [value.trim()];
 }

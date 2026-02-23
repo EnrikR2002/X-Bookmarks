@@ -7,20 +7,22 @@ import { EmbedBuilder } from 'discord.js';
 import { BookmarkAnalysis, BookmarkCategory } from '../types/bookmark.js';
 import { DigestStats, CategoryGroup } from '../types/digest.js';
 
-const CATEGORY_EMOJI: Record<BookmarkCategory, string> = {
-  AI: '🤖',
-  crypto: '₿',
-  marketing: '📈',
-  tools: '🛠️',
-  personal: '💪',
-  news: '📰',
-  'content-ideas': '💡',
-  other: '📌',
-};
+const ALL_CATEGORIES: BookmarkCategory[] = [
+  'AI',
+  'crypto',
+  'marketing',
+  'tools',
+  'personal',
+  'news',
+  'content-ideas',
+  'other',
+];
 
 const TWITTER_BLUE = 0x1da1f2;
 const MAX_FIELD_LENGTH = 1024; // Discord field value limit
 const MAX_EMBED_TOTAL = 5800; // Stay under Discord's 6000 char embed limit
+const MAX_KEY_TAKEAWAY_LENGTH = 700;
+const MAX_ACTION_LENGTH = 180;
 
 export class DigestFormatter {
   /**
@@ -50,10 +52,12 @@ export class DigestFormatter {
     for (const group of groups) {
       if (group.items.length === 0) continue;
 
-      const fieldName = `${group.emoji} ${group.category.toUpperCase()} (${group.items.length})`;
+      const fieldName = `[${group.category.toUpperCase()}]`;
 
-      // Build items for this category, potentially splitting across fields
-      const itemTexts = group.items.map((item) => this.formatSingleItem(item));
+      // Build items for this category, splitting oversized items into safe chunks
+      const itemTexts = group.items.flatMap((item) =>
+        this.splitForField(this.formatSingleItem(item), MAX_FIELD_LENGTH)
+      );
 
       let fieldValue = '';
       for (const itemText of itemTexts) {
@@ -108,21 +112,75 @@ export class DigestFormatter {
    * Format a single bookmark item with rich detail
    */
   private static formatSingleItem(item: BookmarkAnalysis): string {
-    const icon = item.isActionable ? '🎯' : '📖';
-    const engagement = item.likeCount > 0 ? ` (❤️${item.likeCount})` : '';
+    const normalizedActions = Array.isArray(item.actions)
+      ? item.actions
+        .map((action) => this.truncateText(String(action || '').trim(), MAX_ACTION_LENGTH))
+        .filter(Boolean)
+        .slice(0, 5)
+      : [];
 
-    // Ensure multi-line keyTakeaway gets proper blockquote formatting
-    const blockquoted = item.keyTakeaway
-      .split('\n')
-      .map((line) => `> ${line}`)
-      .join('\n');
+    const actions = normalizedActions.length > 0
+      ? normalizedActions
+      : ['Review this bookmark and decide the most relevant next step.'];
+
+    const actionsText = actions.map((action) => `- ${action}`).join('\n');
+    const tweetUrl = `https://x.com/${item.authorUsername}/status/${item.bookmarkId}`;
+    const keyTakeaway = this.truncateText(item.keyTakeaway, MAX_KEY_TAKEAWAY_LENGTH);
 
     return (
-      `${icon} **${item.summary}** — @${item.authorUsername}${engagement}\n` +
-      `${blockquoted}\n` +
-      `→ *${item.action}*\n` +
-      `\`ID: ${item.bookmarkId}\`\n\n`
+      `**${item.summary}** - @${item.authorUsername}\n\n` +
+      `${keyTakeaway}\n\n` +
+      `Bookmark ID: ${item.bookmarkId}\n` +
+      `Link to the tweet: ${tweetUrl}\n` +
+      `Suggested actions:\n` +
+      `${actionsText}\n\n`
     );
+  }
+
+  private static splitForField(text: string, maxLength: number): string[] {
+    if (text.length <= maxLength) return [text];
+
+    const lines = text.split('\n');
+    const chunks: string[] = [];
+    let current = '';
+
+    const pushCurrent = () => {
+      if (current.trim().length > 0) {
+        chunks.push(current.trimEnd());
+        current = '';
+      }
+    };
+
+    for (const line of lines) {
+      const candidate = current.length > 0 ? `${current}\n${line}` : line;
+      if (candidate.length <= maxLength) {
+        current = candidate;
+        continue;
+      }
+
+      pushCurrent();
+
+      if (line.length <= maxLength) {
+        current = line;
+        continue;
+      }
+
+      let remaining = line;
+      while (remaining.length > maxLength) {
+        chunks.push(remaining.slice(0, maxLength));
+        remaining = remaining.slice(maxLength);
+      }
+      current = remaining;
+    }
+
+    pushCurrent();
+    return chunks.length > 0 ? chunks : [this.truncateText(text, maxLength)];
+  }
+
+  private static truncateText(text: string, maxLength: number): string {
+    if (text.length <= maxLength) return text;
+    const safeLength = Math.max(0, maxLength - 3);
+    return `${text.slice(0, safeLength)}...`;
   }
 
   /**
@@ -131,7 +189,7 @@ export class DigestFormatter {
   private static groupByCategory(analyses: BookmarkAnalysis[]): CategoryGroup[] {
     const grouped = new Map<BookmarkCategory, BookmarkAnalysis[]>();
 
-    for (const category of Object.keys(CATEGORY_EMOJI) as BookmarkCategory[]) {
+    for (const category of ALL_CATEGORIES) {
       grouped.set(category, []);
     }
 
@@ -145,7 +203,6 @@ export class DigestFormatter {
       .map(([category, items]) => ({
         category,
         items,
-        emoji: CATEGORY_EMOJI[category],
       }))
       .sort((a, b) => b.items.length - a.items.length);
   }

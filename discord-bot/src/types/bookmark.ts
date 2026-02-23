@@ -18,7 +18,7 @@ export interface BookmarkAnalysis {
   isActionable: boolean;
   summary: string;
   keyTakeaway: string;
-  action: string;
+  actions: string[];
   author: string;
   authorUsername: string;
   text: string;

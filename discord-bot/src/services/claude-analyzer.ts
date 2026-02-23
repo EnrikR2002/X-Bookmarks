@@ -61,7 +61,7 @@ interface AnalysisResponse {
   isActionable: boolean;
   summary: string;
   keyTakeaway: string;
-  action: string;
+  actionIdeas: string[];
 }
 
 export class ClaudeAnalyzer {
@@ -220,8 +220,15 @@ export class ClaudeAnalyzer {
         isActionable: false,
         summary: bookmark.text.slice(0, 100) + '...',
         keyTakeaway: 'Could not analyze this bookmark.',
-        action: 'No specific action identified',
+        actionIdeas: ['Review this bookmark manually and decide your next step.'],
       };
+
+      const actions = Array.isArray(analysis.actionIdeas)
+        ? analysis.actionIdeas
+          .map((idea) => String(idea || '').trim())
+          .filter((idea) => idea.length > 0)
+          .slice(0, 5)
+        : [];
 
       return {
         bookmarkId: bookmark.id,
@@ -229,7 +236,10 @@ export class ClaudeAnalyzer {
         isActionable: analysis.isActionable,
         summary: analysis.summary,
         keyTakeaway: analysis.keyTakeaway,
-        action: analysis.action,
+        actions:
+          actions.length > 0
+            ? actions
+            : ['Review this bookmark manually and decide your next step.'],
         author: bookmark.author.name,
         authorUsername: bookmark.author.username,
         text: bookmark.text,
@@ -299,7 +309,11 @@ For each bookmark, produce:
   "isActionable": boolean,
   "summary": "A specific, descriptive title (8-15 words) that captures the ACTUAL topic — NOT 'Shared link' or 'Unknown content'",
   "keyTakeaway": "3-5 sentence deep breakdown: (1) What specific claim/insight/resource is being shared? (2) Why is this valuable or interesting? (3) What makes this bookmark worth keeping? Include specific details, names, numbers, or frameworks mentioned.",
-  "action": "A specific, concrete next step the user can take (start with a verb like 'Read...', 'Research...', 'Try...', 'Apply...', 'Watch...')"
+  "actionIdeas": [
+    "A specific, concrete next step the user can take (verb-first)",
+    "Another specific action tied to details in the bookmark",
+    "A third tactical next step"
+  ]
 }
 
 **Category Guidelines (use "other" ONLY as absolute last resort):**
@@ -318,7 +332,8 @@ For each bookmark, produce:
 4. Quoted tweets are PART of the bookmark's context. The main tweet is commenting on or amplifying the quoted tweet. Analyze BOTH together.
 5. High engagement (1000+ likes) means the content resonated — try harder to understand why.
 6. Categorize aggressively. Most tweets fit into a real category. Only use "other" if it truly doesn't fit anywhere.
-7. Actions must be SPECIFIC to this bookmark. Not "investigate further" but "Read [specific article/thread]" or "Try [specific technique]" or "Research [specific topic]."
+7. Action ideas must be SPECIFIC to this bookmark. Not "investigate further" but "Read [specific article/thread]" or "Try [specific technique]" or "Research [specific topic]."
+8. Return 3-5 action ideas per bookmark. Every action should be concise, practical, and start with a verb.
 
 **Bookmarks to analyze:**
 ${bookmarksText}
@@ -429,7 +444,7 @@ Array must have exactly ${bookmarks.length} objects.`;
           isActionable: false,
           summary: 'Unable to analyze',
           keyTakeaway: 'Analysis was not available for this bookmark.',
-          action: 'No action identified',
+          actionIdeas: ['Review this bookmark manually and decide your next step.'],
         });
       }
 
@@ -444,7 +459,7 @@ Array must have exactly ${bookmarks.length} objects.`;
         isActionable: false,
         summary: 'Analysis failed',
         keyTakeaway: 'Could not analyze this bookmark.',
-        action: 'Unable to generate action',
+        actionIdeas: ['Review this bookmark manually and decide your next step.'],
       }));
     }
   }
