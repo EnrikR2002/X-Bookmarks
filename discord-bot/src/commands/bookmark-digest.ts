@@ -24,9 +24,6 @@ export async function handleBookmarkDigest(
     const discordUserId = interaction.user.id;
     // How many NEW bookmarks to analyze
     const analysisTarget = (interaction.options.get('count')?.value as number) || 10;
-    // Fetch a buffer to account for already-analyzed ones (fetch 4x or at least 50)
-    const fetchCount = Math.max(analysisTarget * 4, 50);
-    const force = (interaction.options.get('force')?.value as boolean) || false;
 
     // Ensure user has registered X tokens
     if (!UserStore.hasAuthTokens(discordUserId)) {
@@ -42,48 +39,31 @@ export async function handleBookmarkDigest(
     const user = UserStore.getOrCreateUser(discordUserId);
     const { auth_token: authToken, ct0 } = user;
 
-    // Step 1: Fetch bookmarks via bird CLI (fetch extra buffer to find new ones)
+    // Step 1: Fetch bookmarks iteratively until we have enough new ones.
+    // Start with a small batch, triple the fetch window if we need more.
     await interaction.editReply('🔍 Fetching bookmarks...');
-    const bookmarks = await BookmarkFetcher.fetchBookmarks({
-      count: fetchCount,
-      authToken,
-      ct0,
-    });
+    let bookmarks: Awaited<ReturnType<typeof BookmarkFetcher.fetchBookmarks>> = [];
+    let newBookmarks: typeof bookmarks = [];
+    let skippedCount = 0;
+    const MAX_FETCH = 200;
 
-    // Step 2: Analyze with Groq (with progress updates)
-    await interaction.editReply(`🔍 Fetched ${bookmarks.length} bookmarks — preparing analysis...`);
+    for (let fetchCount = Math.max(analysisTarget + 10, 20); ; fetchCount = Math.min(fetchCount * 3, MAX_FETCH)) {
+      bookmarks = await BookmarkFetcher.fetchBookmarks({ count: fetchCount, authToken, ct0 });
+      const alreadyAnalyzed = BookmarkStore.hasBeenAnalyzed(discordUserId, bookmarks.map((b) => b.id));
+      newBookmarks = bookmarks.filter((b) => !alreadyAnalyzed.has(b.id)).slice(0, analysisTarget);
+      skippedCount = alreadyAnalyzed.size;
 
-    const analyzer = new ClaudeAnalyzer();
+      // Done if we have enough new ones, or we've hit the fetch ceiling
+      if (newBookmarks.length >= analysisTarget || fetchCount >= MAX_FETCH) break;
 
-    // Show progress as batches complete
-    analyzer.setProgressCallback(async (processed, total, status) => {
-      try {
-        if (status) {
-          await interaction.editReply(`⏳ ${status}`);
-        } else if (processed >= total) {
-          await interaction.editReply(`📊 Formatting ${total} bookmarks into digest...`);
-        } else {
-          await interaction.editReply(
-            `⏳ Analyzing bookmarks... ${processed}/${total} done`
-          );
-        }
-      } catch {
-        // Ignore edit failures during progress updates
-      }
-    });
+      // Need more — let the user know we're looking further back
+      await interaction.editReply(
+        `🔍 Found ${newBookmarks.length}/${analysisTarget} new — looking further back (${Math.min(fetchCount * 3, MAX_FETCH)} total)...`
+      );
+    }
 
-    // Check for already-analyzed bookmarks (skip re-analysis), cap at analysisTarget
-    // force=true bypasses the cache entirely
-    const alreadyAnalyzed = force
-      ? new Set<string>()
-      : BookmarkStore.hasBeenAnalyzed(discordUserId, bookmarks.map((b) => b.id));
-
-    const newBookmarks = bookmarks
-      .filter((b) => !alreadyAnalyzed.has(b.id))
-      .slice(0, analysisTarget);
-
-    if (alreadyAnalyzed.size > 0) {
-      console.log(`⏭️ Skipped ${alreadyAnalyzed.size} already-analyzed bookmarks`);
+    if (skippedCount > 0) {
+      console.log(`⏭️ Skipped ${skippedCount} already-analyzed bookmarks`);
     }
 
     if (newBookmarks.length === 0) {
@@ -94,6 +74,30 @@ export async function handleBookmarkDigest(
       await interaction.editReply({ content: '', embeds: [embed] });
       return;
     }
+
+    await interaction.editReply(
+      `🔍 Found ${newBookmarks.length} new bookmark${newBookmarks.length !== 1 ? 's' : ''} — starting analysis...`
+    );
+
+    // Step 2: Analyze with Groq (with progress updates)
+    const analyzer = new ClaudeAnalyzer();
+
+    // Show progress as batches complete
+    analyzer.setProgressCallback(async (processed, total, status) => {
+      try {
+        if (status) {
+          await interaction.editReply(`⏳ ${status}`);
+        } else if (processed >= total) {
+          await interaction.editReply(`📊 Formatting ${total} bookmark${total !== 1 ? 's' : ''} into digest...`);
+        } else {
+          await interaction.editReply(
+            `⏳ Analyzing bookmarks... ${processed}/${total} done`
+          );
+        }
+      } catch {
+        // Ignore edit failures during progress updates
+      }
+    });
 
     const { analyses, totalCost, inputTokens, outputTokens } =
       await analyzer.analyzeBookmarks(newBookmarks, { authToken, ct0 });

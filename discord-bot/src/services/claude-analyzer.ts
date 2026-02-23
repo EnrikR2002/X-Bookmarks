@@ -99,11 +99,20 @@ export class ClaudeAnalyzer {
       (m) => m.BookmarkFetcher.refetchFullContent(bookmarks, authOptions)
     );
 
-    // Step 2: Enrich bookmarks with URL metadata (for non-article external links)
-    // x.com status URLs are fetched via bird read instead of HTML scraping
+    // Step 2: Enrich bookmarks with URL metadata (for non-article external links).
+    // Hard 10s overall timeout — some HTTP connections can hang for 75+ seconds
+    // due to TCP SYN_SENT (firewall dropping packets), which ignores socket idle timeouts.
     console.log(`🔗 Enriching ${enrichedBookmarks.length} bookmarks with URL metadata...`);
     this.onProgress?.(0, enrichedBookmarks.length, 'Fetching link previews...');
-    const urlEnrichments = await enrichBookmarksWithUrls(enrichedBookmarks, authOptions);
+    const urlEnrichments = await Promise.race([
+      enrichBookmarksWithUrls(enrichedBookmarks, authOptions),
+      new Promise<Map<string, string>>((resolve) =>
+        setTimeout(() => {
+          console.warn('⚠️ URL enrichment timed out after 10s, skipping link context');
+          resolve(new Map());
+        }, 10_000)
+      ),
+    ]);
     console.log(`🔗 Enriched ${urlEnrichments.size} bookmarks with link context`);
 
     const allAnalyses: BookmarkAnalysis[] = [];

@@ -6,7 +6,6 @@
 
 import https from 'https';
 import http from 'http';
-import { spawn } from 'child_process';
 import { BirdBookmark } from '../types/bird-cli.js';
 
 interface UrlMetadata {
@@ -55,11 +54,11 @@ async function fetchUrlMetadata(
 ): Promise<UrlMetadata> {
   const origin = originalUrl || url;
 
-  // Short-circuit: x.com/twitter.com status URLs won't return useful HTML — use bird CLI
-  const xMatch = url.match(X_STATUS_PATTERN);
-  if (xMatch && authOptions?.authToken && authOptions?.ct0) {
-    const meta = await fetchXTweetContent(url, xMatch[1], authOptions);
-    return { ...meta, url: origin };
+  // Short-circuit: x.com/twitter.com status URLs — skip URL enrichment entirely.
+  // Quoted tweet content is already available in bookmark.quotedTweet and calling
+  // bird read for every linked tweet URL causes severe slowdowns (up to 15s per URL).
+  if (url.match(X_STATUS_PATTERN)) {
+    return { url: origin, domain: 'x.com', title: null, description: null };
   }
 
   return new Promise((resolve) => {
@@ -192,61 +191,6 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&#39;/g, "'")
     .replace(/&#x27;/g, "'")
     .replace(/&#x2F;/g, '/');
-}
-
-/**
- * Fetch tweet/article content for an x.com or twitter.com status URL using bird read.
- * Returns a UrlMetadata with the tweet text/article title as title+description.
- */
-async function fetchXTweetContent(
-  url: string,
-  tweetId: string,
-  authOptions: XAuthOptions
-): Promise<UrlMetadata> {
-  const { authToken, ct0 } = authOptions;
-  if (!authToken || !ct0) {
-    return { url, domain: 'x.com', title: null, description: null };
-  }
-
-  return new Promise((resolve) => {
-    const proc = spawn('bird', ['read', tweetId, '--json'], {
-      env: { ...process.env, AUTH_TOKEN: authToken, CT0: ct0 },
-      shell: true,
-    });
-
-    let stdout = '';
-    let stderr = '';
-    proc.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
-    proc.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
-
-    proc.on('close', (code: number | null) => {
-      if (code !== 0) {
-        console.warn(`⚠️ bird read ${tweetId} failed (code ${code}): ${stderr.slice(0, 100)}`);
-        resolve({ url, domain: 'x.com', title: null, description: null });
-        return;
-      }
-      try {
-        const tweet = JSON.parse(stdout) as BirdBookmark;
-        let title: string;
-        let description: string;
-        if (tweet.article) {
-          title = `X Article: "${tweet.article.title}"`;
-          description = tweet.article.previewText || tweet.text.slice(0, 300);
-        } else {
-          const snippet = tweet.text.slice(0, 100);
-          title = `@${tweet.author.username}: "${snippet}${tweet.text.length > 100 ? '...' : ''}"`;
-          description = tweet.text.slice(0, 300);
-        }
-        resolve({ url, domain: 'x.com', title, description });
-      } catch {
-        resolve({ url, domain: 'x.com', title: null, description: null });
-      }
-    });
-
-    proc.on('error', () => {
-      resolve({ url, domain: 'x.com', title: null, description: null });
-    });
-  });
 }
 
 /**

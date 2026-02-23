@@ -117,6 +117,10 @@ export class BookmarkFetcher {
     }
 
     return new Promise((resolve, reject) => {
+      // On Linux: use detached=true so the child gets its own process group.
+      // This lets us kill the entire group (shell + bird grandchild) with SIGKILL,
+      // which closes the pipe immediately so proc.on('close') fires quickly.
+      const useDetached = process.platform !== 'win32';
       const proc = spawn(
         'bird',
         ['read', bookmarkId, '--json'],
@@ -127,8 +131,24 @@ export class BookmarkFetcher {
             CT0: ct0,
           },
           shell: true,
+          detached: useDetached,
         }
       );
+
+      // Kill bird process if it takes too long (15s timeout)
+      const timeout = setTimeout(() => {
+        try {
+          if (useDetached && proc.pid) {
+            // Kill entire process group: shell + bird grandchild
+            process.kill(-proc.pid, 'SIGKILL');
+          } else {
+            proc.kill();
+          }
+        } catch {
+          proc.kill();
+        }
+        reject(new Error(`bird read ${bookmarkId} timed out after 15s`));
+      }, 15_000);
 
       let stdout = '';
       let stderr = '';
@@ -142,6 +162,7 @@ export class BookmarkFetcher {
       });
 
       proc.on('close', (code) => {
+        clearTimeout(timeout);
         if (code !== 0) {
           return reject(
             new Error(`Bird CLI failed to fetch tweet ${bookmarkId}: ${stderr}`)
@@ -158,6 +179,7 @@ export class BookmarkFetcher {
       });
 
       proc.on('error', (err) => {
+        clearTimeout(timeout);
         reject(new Error(`Failed to spawn bird CLI: ${err.message}`));
       });
     });
@@ -179,10 +201,15 @@ export class BookmarkFetcher {
 
     console.log(`📰 Re-fetching ${stubs.length} stub bookmark(s) for full content...`);
 
-    // Re-fetch stubs in parallel (bird read is fast)
-    const refetched = await Promise.allSettled(
-      stubs.map((b) => BookmarkFetcher.fetchBookmarkById(b.id, options))
-    );
+    // Re-fetch stubs SEQUENTIALLY — each bird read process uses ~40MB RAM and the
+    // Fly.io container only has 256MB. Running all in parallel causes OOM crashes.
+    const refetched: PromiseSettledResult<BirdBookmark>[] = [];
+    for (const stub of stubs) {
+      const result = await BookmarkFetcher.fetchBookmarkById(stub.id, options)
+        .then((v) => ({ status: 'fulfilled' as const, value: v }))
+        .catch((e) => ({ status: 'rejected' as const, reason: e }));
+      refetched.push(result);
+    }
 
     // Build a lookup map of re-fetched bookmarks
     const fullContentMap = new Map<string, BirdBookmark>();

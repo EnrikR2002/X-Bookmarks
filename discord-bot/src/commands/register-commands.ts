@@ -19,12 +19,6 @@ const commands = [
         .setRequired(false)
         .setMinValue(1)
         .setMaxValue(100)
-    )
-    .addBooleanOption((option) =>
-      option
-        .setName('force')
-        .setDescription('Re-analyze bookmarks even if already cached')
-        .setRequired(false)
     ),
   new SlashCommandBuilder()
     .setName('make-actionable')
