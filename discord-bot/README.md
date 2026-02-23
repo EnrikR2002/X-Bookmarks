@@ -1,214 +1,123 @@
 # X Bookmarks Discord Bot
 
-A Discord bot that fetches your X/Twitter bookmarks, analyzes them with AI, and helps you take action on them. Runs 24/7 on Fly.io.
+Discord bot for turning X/Twitter bookmarks into structured digests and actionable next steps.
 
-## Features
+## What it does
 
-- **`/bookmark-digest`** — Fetch your latest bookmarks, categorize them with Groq AI, and get a structured digest. Skips already-analyzed bookmarks automatically.
-- **`/make-actionable`** — Deep-dive a single bookmark: Groq reads the full content and returns specific action ideas + a ready-to-paste Opus prompt (delivered as a `.txt` file).
-- **`/schedule-digest`** — Schedule automatic daily or weekly digests to any channel.
-- **`/bookmark-stats`** — View stats on your analyzed bookmarks: category breakdown, actionable %, top authors, and token usage.
-- **`/register-auth`** — Register your X auth tokens (stored AES-256-GCM encrypted in SQLite per user).
+- Fetches bookmarks from X via `bird` CLI.
+- Re-fetches stub bookmarks (`t.co` only) to recover full article content.
+- Enriches external links with title/description context.
+- Analyzes bookmarks with Groq (`llama-3.3-70b-versatile`) in batches.
+- Stores analyses in SQLite and skips already-analyzed bookmarks automatically.
+- Sends category-grouped digest embeds to Discord.
+- Supports one-off deep analysis (`/make-actionable`) with downloadable Opus prompt.
+- Supports scheduled daily/weekly digests.
 
-## Tech Stack
+## Slash commands
 
-| Layer | Technology |
-| --- | --- |
-| Bot framework | Discord.js v14 |
-| Language | TypeScript (ESM) |
-| AI analysis | Groq SDK — `llama-3.3-70b-versatile` (free tier) |
-| Bookmark fetching | Bird CLI (`@steipete/bird`) |
-| Database | SQLite via `better-sqlite3` |
-| Token encryption | AES-256-GCM (Node.js `crypto`) |
-| Scheduling | `node-cron` (polls every minute) |
-| Hosting | Fly.io (free tier, always-on) |
+- `/register-auth auth_token:<...> ct0:<...>`
+  - Validates cookies with `bird whoami`, then stores encrypted per-user tokens.
+- `/bookmark-digest [count]`
+  - Finds up to `count` new bookmarks (default `10`, max `100`), analyzes them, and posts a digest.
+- `/make-actionable bookmark-id:<tweet id or URL>`
+  - Deep analysis of one bookmark + 3–5 action ideas + `.txt` Opus prompt attachment.
+- `/schedule-digest enable channel:<#channel> frequency:<daily|weekly>`
+  - Daily: 09:00 UTC (`0 9 * * *`)
+  - Weekly: Monday 09:00 UTC (`0 9 * * 1`)
+- `/schedule-digest disable`
+- `/bookmark-stats [period:<week|month|all>]`
+  - Shows totals, category distribution, actionable %, top authors, and token usage.
 
-## Setup
+## Current digest format
 
-### 1. Prerequisites
+Each category section is shown as `[CATEGORY]` and each item is formatted like:
 
-- Node.js 20+
-- Discord bot token — [create one here](https://discord.com/developers/applications)
-- Groq API key — [get one here](https://console.groq.com/) (free)
-- Bird CLI: `npm install -g @steipete/bird`
-- X/Twitter `auth_token` and `ct0` cookies
+- `Title - @author`
+- 3–5 sentence breakdown
+- `Bookmark ID: ...`
+- `Link to the tweet: https://x.com/<author>/status/<id>`
+- `Suggested actions:` with bullet points
 
-### 2. Get X Auth Tokens
+The formatter enforces Discord embed limits (field chunking + truncation safeguards).
 
-1. Open X/Twitter in your browser and log in
-2. Open DevTools (F12) → Application → Cookies → `https://x.com`
-3. Copy the value of `auth_token` and `ct0`
+## Stack
 
-### 3. Environment Variables
+- TypeScript + Discord.js v14
+- Groq SDK (`llama-3.3-70b-versatile`)
+- `@steipete/bird` for bookmark access
+- SQLite (`better-sqlite3`) with WAL
+- `node-cron` scheduler
+- AES-256-GCM token encryption
+- Fly.io deployment with persistent volume (`/app/data`)
 
-Create a `.env` file in `discord-bot/`:
+## Local setup
+
+1. Install dependencies:
 
 ```bash
-DISCORD_TOKEN=your_discord_bot_token
-DISCORD_CLIENT_ID=your_discord_application_id
-GROQ_API_KEY=your_groq_api_key
-ENCRYPTION_KEY=a_random_32_character_string
-```
-
-`ENCRYPTION_KEY` must be exactly 32 characters — used to encrypt user auth tokens at rest.
-
-### 4. Install & Run Locally
-
-```bash
-cd discord-bot
 npm install
-npm run build
-npm start
 ```
 
-### 5. Register Slash Commands
+1. Create `.env` in `discord-bot/`:
+
+```bash
+DISCORD_TOKEN=...
+DISCORD_CLIENT_ID=...
+# Optional but recommended for fast command registration during development
+GUILD_ID=...
+
+GROQ_API_KEY=...
+ENCRYPTION_KEY=<64-hex-characters>
+
+# Optional fallback tokens for single-user/local use
+AUTH_TOKEN=...
+CT0=...
+```
+
+1. Build + run:
+
+```bash
+npm run build
+npm run start
+```
+
+1. Register slash commands:
 
 ```bash
 npm run register-commands
 ```
 
-## Usage
+## Deploy (Fly.io)
 
-### `/register-auth`
-
-Register your X credentials so the bot can fetch your bookmarks. Tokens are encrypted before being stored.
-
-```text
-/register-auth auth_token:<your_auth_token> ct0:<your_ct0>
-```
-
-### `/bookmark-digest [count]`
-
-Fetch and analyze your latest bookmarks. Already-analyzed bookmarks are skipped automatically (deduplication via SQLite). Default count: 10.
-
-```text
-/bookmark-digest
-/bookmark-digest count:25
-```
-
-### `/make-actionable`
-
-Deep-analyze a single bookmark. Groq reads the full content and generates specific, tactical action ideas. A ready-to-paste Claude Opus prompt is sent as a downloadable `.txt` file.
-
-```text
-/make-actionable bookmark-id:1234567890
-/make-actionable bookmark-id:https://x.com/username/status/1234567890
-```
-
-### `/schedule-digest`
-
-Set up automatic digests in any channel.
-
-```text
-/schedule-digest enable channel:#digest-channel frequency:weekly
-/schedule-digest disable
-```
-
-### `/bookmark-stats [period]`
-
-View a breakdown of your analyzed bookmarks.
-
-```text
-/bookmark-stats
-/bookmark-stats period:week
-/bookmark-stats period:month
-```
-
-## Project Structure
-
-```text
-discord-bot/
-├── src/
-│   ├── index.ts                        # Entry point, Discord client setup
-│   ├── commands/
-│   │   ├── register-commands.ts        # Slash command registration
-│   │   ├── register-auth.ts            # /register-auth handler
-│   │   ├── bookmark-digest.ts          # /bookmark-digest handler
-│   │   ├── make-actionable.ts          # /make-actionable handler
-│   │   ├── schedule-digest.ts          # /schedule-digest handler
-│   │   └── bookmark-stats.ts           # /bookmark-stats handler
-│   ├── services/
-│   │   ├── bookmark-fetcher.ts         # Bird CLI wrapper + URL enricher caller
-│   │   ├── claude-analyzer.ts          # Groq analysis (batch + single actionable)
-│   │   ├── digest-formatter.ts         # Discord embed builders
-│   │   ├── scheduler.ts                # Cron scheduler for auto-digests
-│   │   ├── url-enricher.ts             # Fetches og:title/description from URLs
-│   │   └── cost-tracker.ts             # Token usage tracking
-│   ├── database/
-│   │   ├── db.ts                       # SQLite singleton + migrations
-│   │   ├── user-store.ts               # User tokens + schedule storage
-│   │   ├── bookmark-store.ts           # Analyzed bookmark cache + dedup
-│   │   └── usage-store.ts              # Token usage log
-│   ├── utils/
-│   │   └── crypto.ts                   # AES-256-GCM encrypt/decrypt
-│   └── types/
-│       ├── bird-cli.ts                 # Bird CLI JSON output types
-│       ├── bookmark.ts                 # Internal bookmark types
-│       └── digest.ts                   # Digest/analysis result types
-├── data/
-│   └── bookmarks.db                    # SQLite database (gitignored)
-├── Dockerfile                          # Multi-stage build for Fly.io
-├── fly.toml                            # Fly.io config (worker, no HTTP)
-├── .env                                # Local secrets (gitignored)
-├── package.json
-└── tsconfig.json
-```
-
-## Deployment (Fly.io)
-
-The bot runs as a persistent worker on Fly.io's free tier. No web server — just a Discord gateway connection.
-
-### Deploy
-
-```powershell
-cd discord-bot
+```bash
 fly deploy
+fly logs -a x-bookmarks-bot
 ```
 
-### View logs
+## Storage model
 
-```powershell
-fly logs
-```
+- `users`: encrypted X tokens, schedule config, last digest metadata
+- `analyzed_bookmarks`: cached analyses (category/summary/takeaway/actions/etc.) for dedup
+- `usage_log`: model token usage by operation
 
-### Set/update secrets
+## Notes on the original Claude Skill
 
-```powershell
-fly secrets set DISCORD_TOKEN="..." GROQ_API_KEY="..."
-```
+This repo contains two separate things:
 
-### Update after code changes
+1. `discord-bot/` (the production bot)
+2. `skills/x-bookmarks/` (Claude Skill docs/scripts)
 
-```powershell
-fly deploy
-```
+Current status:
 
-The SQLite database persists across deployments via a Fly volume mounted at `/app/data`.
+- The Discord bot does **not** import or execute `skills/x-bookmarks/SKILL.md`.
+- There is no runtime wiring from `discord-bot/src/**` to the skill folder.
+- The bot does include a concept inspired by that workflow: `/make-actionable` generates an “Opus-ready” prompt and sends it as a file.
+- The shell helper scripts in `skills/x-bookmarks/scripts/` and `discord-bot/scripts/` are currently similar, but the bot itself uses direct `bird` process calls in code (`BookmarkFetcher`) rather than invoking the skill definition.
+
+So: the Skill is currently reference material/inspiration, not an active runtime dependency.
 
 ## Troubleshooting
 
-### "Invalid X auth tokens" on `/register-auth`
-
-Your `auth_token` and `ct0` cookies may have expired. Re-login to X in your browser and copy fresh cookie values.
-
-### "Bird CLI failed"
-
-1. Check `fly logs` for the exact error
-2. Verify bird is installed in the container (it's installed via Dockerfile)
-3. Your X session cookies may have expired — re-register with `/register-auth`
-
-### "No new bookmarks since last digest"
-
-All fetched bookmarks have already been analyzed. Try a larger count: `/bookmark-digest count:50`.
-
-### Bot not responding
-
-1. Check `fly status` — machine should be `started`
-2. Check `fly logs` for crash errors
-3. Verify secrets are set: `fly secrets list`
-
-## Cost
-
-- **Groq API**: Free tier covers typical personal usage (6000 tokens/min, 500k tokens/day)
-- **Fly.io**: Free tier — 1 shared-cpu-1x machine with 256MB RAM, 3GB volume storage
-- **Total**: $0/month for personal use
+- `Invalid X auth tokens`: re-copy fresh `auth_token` + `ct0`, then run `/register-auth` again.
+- `Bird CLI failed`: verify `bird` is installed and auth works with `bird whoami`.
+- `No new bookmarks`: bot dedupes by bookmark ID; increase `count` or wait for newer bookmarks.
